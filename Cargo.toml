@@ -1,0 +1,57 @@
+[workspace]
+resolver = "2"
+members = ["api", "migration"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+authors = ["Ambuj Kumar"]
+
+[workspace.dependencies]
+# Web Framework
+actix-web = "4"
+actix-rt = "2"
+
+# Database ORM
+sea-orm = { version = "1", features = ["sqlx-postgres", "runtime-tokio-rustls", "macros"] }
+sea-orm-migration = "1"
+
+# Redis
+redis = { version = "0.31", features = ["tokio-comp"] }
+
+# Authentication
+bcrypt = "0.16"
+jsonwebtoken = "9"
+
+# Validation
+garde = { version = "0.20", features = ["derive", "email"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# UUID
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Date & Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Async Runtime
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+
+# Environment
+dotenv = "0.15"
+
+# Error Handling
+thiserror = "2"
+anyhow = "1"
+
+# Async utilities
+futures = "0.3"
+
+# HTTP Client (for tests)
+reqwest = { version = "0.12", features = ["json"] }
