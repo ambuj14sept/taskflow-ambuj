@@ -76,7 +76,7 @@ cd taskflow-ambuj
 docker compose up --build
 ```
 
-The API will be available at **http://localhost:8080**
+The API will be available at **http://localhost:9090**
 
 All environment variables are configured inline in `docker-compose.yml` — no manual setup required. `docker compose up` handles everything:
 1. Pulls PostgreSQL and Redis images
@@ -108,7 +108,7 @@ cargo run -p api
 | `JWT_EXPIRY_HOURS` | Token validity (hours) | `24` |
 | `BCRYPT_COST` | Password hash cost factor | `12` |
 | `SERVER_HOST` | Server bind address | `0.0.0.0` |
-| `SERVER_PORT` | Server port | `8080` |
+| `SERVER_PORT` | Server port | `9090` |
 | `ENV` | Environment name | `dev` |
 
 ## Database Migrations

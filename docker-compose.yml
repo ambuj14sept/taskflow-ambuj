@@ -46,17 +46,17 @@ services:
       JWT_EXPIRY_HOURS: 24
       BCRYPT_COST: 12
       SERVER_HOST: 0.0.0.0
-      SERVER_PORT: 8080
+      SERVER_PORT: 9090
       ENV: dev
     ports:
-      - "9090:8080"
+      - "9090:9090"
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/health"]
       interval: 30s
       timeout: 10s
       retries: 3

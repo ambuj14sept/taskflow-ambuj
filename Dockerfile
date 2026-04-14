@@ -46,6 +46,6 @@ COPY seed.sql /app/seed.sql
 RUN addgroup -S taskflow && adduser -S taskflow -G taskflow
 USER taskflow
 
-EXPOSE 8080
+EXPOSE 9090
 
 CMD ["taskflow"]
