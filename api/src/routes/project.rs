@@ -201,8 +201,13 @@ pub async fn delete_project(
 ) -> Result<HttpResponse, AppError> {
     let project_id = path.into_inner();
 
+    // Check project exists
+    let proj = project::find_by_id(&state.db, project_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
     // Check ownership
-    if !project::is_owner(&state.db, project_id, user.user_id).await? {
+    if proj.owner_id != user.user_id {
         return Err(AppError::Forbidden);
     }
 
