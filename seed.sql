@@ -8,7 +8,7 @@ INSERT INTO users (id, name, email, password, created_at) VALUES (
     'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
     'Test User',
     'test@example.com',
-    '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/X4.flLWrYLYfCDVuS',
+    '$2b$12$6oIOEbMCjkRMKe6rzb7EAuc9k6RUQ6G/zid/k75Kas5qZvO3F1dwa',
     NOW()
 ) ON CONFLICT (email) DO NOTHING;
 

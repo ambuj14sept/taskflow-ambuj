@@ -1,7 +1,8 @@
-use actix_web::{dev::Payload, web, FromRequest, HttpMessage, HttpRequest};
-use futures::future::{ready, Ready};
+use actix_web::{dev::Payload, web, FromRequest, HttpRequest};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
+use std::pin::Pin;
 use uuid::Uuid;
 
 use crate::config::global_state::AppState;
@@ -14,21 +15,68 @@ pub struct AuthenticatedUser {
     pub session_id: Uuid,
 }
 
+/// Async FromRequest — extracts JWT from header, validates session in Redis.
+/// No separate middleware needed. Actix calls this per-handler automatically.
 impl FromRequest for AuthenticatedUser {
     type Error = AppError;
-    type Future = Ready<Result<Self, Self::Error>>;
+    type Future = Pin<Box<dyn Future<Output = Result<Self, Self::Error>>>>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        // Get the authenticated user from request extensions (set by middleware)
-        let user = req
-            .extensions()
-            .get::<AuthenticatedUser>()
-            .cloned();
+        let req = req.clone();
 
-        match user {
-            Some(user) => ready(Ok(user)),
-            None => ready(Err(AppError::Unauthorized)),
-        }
+        Box::pin(async move {
+            // Get AppState from app_data
+            let state = req
+                .app_data::<web::Data<AppState>>()
+                .ok_or(AppError::InternalError("AppState not configured".to_string()))?;
+
+            // Extract JWT from Authorization header
+            let auth_header = req
+                .headers()
+                .get("Authorization")
+                .and_then(|h| h.to_str().ok())
+                .ok_or(AppError::Unauthorized)?;
+
+            if !auth_header.starts_with("Bearer ") {
+                return Err(AppError::Unauthorized);
+            }
+
+            let token = &auth_header[7..];
+
+            // Decode and validate JWT
+            let token_data = jsonwebtoken::decode::<JwtClaims>(
+                token,
+                &jsonwebtoken::DecodingKey::from_secret(state.config.jwt_secret.as_bytes()),
+                &jsonwebtoken::Validation::default(),
+            )
+            .map_err(|_| AppError::Unauthorized)?;
+
+            let claims = token_data.claims;
+
+            // Validate session exists in Redis
+            let key = format!("session:{}", claims.session_id);
+            let mut redis = state.redis.clone();
+            let stored_user_id: Option<String> = redis.get(&key).await?;
+
+            match stored_user_id {
+                Some(id) => {
+                    let parsed_id = Uuid::parse_str(&id)
+                        .map_err(|_| AppError::InternalError("Invalid session data".to_string()))?;
+
+                    // Verify user_id in Redis matches JWT
+                    if parsed_id != claims.user_id {
+                        return Err(AppError::Unauthorized);
+                    }
+
+                    Ok(AuthenticatedUser {
+                        user_id: claims.user_id,
+                        email: claims.email,
+                        session_id: claims.session_id,
+                    })
+                }
+                None => Err(AppError::Unauthorized), // Session expired or invalidated
+            }
+        })
     }
 }
 
@@ -38,65 +86,6 @@ pub struct JwtClaims {
     pub email: String,
     pub session_id: Uuid,
     pub exp: usize,
-}
-
-/// Extract and validate JWT from Authorization header
-pub fn extract_jwt(req: &HttpRequest, jwt_secret: &str) -> Result<JwtClaims, AppError> {
-    let auth_header = req
-        .headers()
-        .get("Authorization")
-        .and_then(|h| h.to_str().ok())
-        .ok_or(AppError::Unauthorized)?;
-
-    if !auth_header.starts_with("Bearer ") {
-        return Err(AppError::Unauthorized);
-    }
-
-    let token = &auth_header[7..];
-
-    let token_data = jsonwebtoken::decode::<JwtClaims>(
-        token,
-        &jsonwebtoken::DecodingKey::from_secret(jwt_secret.as_bytes()),
-        &jsonwebtoken::Validation::default(),
-    )?;
-
-    Ok(token_data.claims)
-}
-
-/// Validate session exists in Redis
-pub async fn validate_session(
-    redis: &mut redis::aio::MultiplexedConnection,
-    session_id: &Uuid,
-) -> Result<Uuid, AppError> {
-    let key = format!("session:{}", session_id);
-    let user_id: Option<String> = redis.get(&key).await?;
-
-    match user_id {
-        Some(id) => {
-            let user_id = Uuid::parse_str(&id)
-                .map_err(|_| AppError::InternalError("Invalid session data".to_string()))?;
-            Ok(user_id)
-        }
-        None => Err(AppError::Unauthorized),
-    }
-}
-
-/// Auth middleware function
-pub async fn auth_middleware(
-    req: &HttpRequest,
-    state: &web::Data<AppState>,
-) -> Result<AuthenticatedUser, AppError> {
-    let claims = extract_jwt(req, &state.config.jwt_secret)?;
-
-    // Validate session in Redis
-    let mut redis = state.redis.clone();
-    validate_session(&mut redis, &claims.session_id).await?;
-
-    Ok(AuthenticatedUser {
-        user_id: claims.user_id,
-        email: claims.email,
-        session_id: claims.session_id,
-    })
 }
 
 /// Generate a JWT token

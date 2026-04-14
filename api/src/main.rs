@@ -1,10 +1,11 @@
-use actix_web::{middleware, web, App, HttpServer};
+use actix_web::{middleware, web, App, HttpMessage, HttpServer};
 use std::sync::Arc;
 use tokio::signal;
 
 use api::config::global_state::AppState;
 use api::config::settings::Config;
 use api::logging::formatter::init_tracing;
+use api::middleware::request_context::RequestContext;
 use api::routes;
 
 #[actix_web::main]
@@ -43,6 +44,12 @@ async fn main() -> std::io::Result<()> {
     let server = HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new((*state.clone()).clone()))
+            // Request context middleware — injects requestId into every request
+            .wrap(middleware::from_fn(|req: actix_web::dev::ServiceRequest, next: actix_web::middleware::Next<actix_web::body::BoxBody>| async move {
+                let ctx = RequestContext::new();
+                req.extensions_mut().insert(ctx);
+                next.call(req).await
+            }))
             .wrap(middleware::Logger::default())
             .wrap(
                 middleware::DefaultHeaders::new()
