@@ -1,56 +1,62 @@
 # TaskFlow API
 
-A minimal but complete task management system backend built with Rust, Actix-web, and PostgreSQL.
+A task management system backend built with Rust, Actix-web, PostgreSQL, and Redis.
 
 ## Overview
 
 TaskFlow is a REST API that allows users to:
-- Register and authenticate
+- Register and authenticate (JWT + Redis sessions)
 - Create and manage projects
-- Add tasks to projects
+- Add tasks to projects with priority and status tracking
 - Assign tasks to users
 - Filter and paginate task listings
-- View project statistics
+- View project-level statistics (task counts by status and assignee)
 
 ## Tech Stack
 
-| Component | Technology |
-|-----------|------------|
-| Language | Rust (Edition 2024) |
-| Web Framework | Actix-web 4 |
-| ORM | SeaORM 1 |
-| Database | PostgreSQL 16 |
-| Cache/Sessions | Redis 7 |
-| Auth | JWT + bcrypt |
-| Validation | garde |
-| Logging | tracing + tracing-subscriber |
+| Component | Technology | Why |
+|-----------|------------|-----|
+| Language | Rust (Edition 2024) | Memory-safe, high-performance, strong type system |
+| Web Framework | Actix-web 4 | Mature async web framework, battle-tested in production |
+| ORM | SeaORM 1 | Async ORM with compile-time query checking |
+| Database | PostgreSQL 16 | Robust relational database with strong ACID guarantees |
+| Cache/Sessions | Redis 7 | In-memory store for instant session validation and logout |
+| Auth | JWT (jsonwebtoken) + bcrypt | Industry-standard token auth with secure password hashing |
+| Validation | garde | Derive-macro based request validation with custom rules |
+| Logging | tracing + tracing-subscriber | Structured JSON logging with async support |
+| Migrations | sea-orm-migration | Rust-native, type-checked, reversible database migrations |
 
 ## Architecture Decisions
 
-### Why Actix-web
-Actix-web is a mature, high-performance async web framework. It's battle-tested and widely used in production Rust services. Chosen for consistency with existing codebases.
+### Why Redis Sessions (not JWT-only)
+Pure JWT auth has one major problem: you cannot invalidate a token before it expires. If a user logs out, their JWT is still valid for up to 24 hours. With Redis-backed sessions, logout = delete Redis key = instant invalidation. No token blacklists or refresh token rotation needed.
 
 ### Why SeaORM
-SeaORM provides async database access with compile-time query checking. Its migration system (`sea-orm-migration`) is Rust-native and integrates seamlessly.
-
-### Why Redis Sessions
-Pure JWT auth cannot be invalidated before expiry. Redis-backed sessions allow instant logout and session revocation. Session data is minimal (just user_id) for performance.
+SeaORM provides async database access with compile-time query checking. Its migration system (`sea-orm-migration`) produces Rust structs for each migration — type-checked at compile time, with both UP and DOWN directions for full reversibility.
 
 ### Why Raw Redis Crate
-The raw `redis` crate with `MultiplexedConnection` is sufficient for this workload. No connection pool needed — multiplexing handles concurrent commands on a single connection.
+The raw `redis` crate with `MultiplexedConnection` is sufficient for our session workload (GET/SET/DEL with TTL). A connection pool (`deadpool-redis`) would add complexity without meaningful benefit at this scale.
 
 ### Project Structure
 ```
-api/src/
-├── config/          # Configuration and global state
-├── routes/          # HTTP handlers
-├── storage/         # Database entities and queries
-│   ├── entities/    # SeaORM models
-│   └── queries/     # Database operations
-├── middleware/      # Auth and request context
-├── errors/          # Error types
-├── logging/         # Custom structured logging
-└── validation/      # Request validation
+taskflow-ambuj/
+├── api/                        # Main API crate
+│   ├── src/
+│   │   ├── config/             # Config struct + AppState initialization
+│   │   ├── routes/             # HTTP handlers (auth, projects, tasks)
+│   │   ├── storage/
+│   │   │   ├── entities/       # SeaORM models (user, project, task)
+│   │   │   └── queries/        # Database operations per table
+│   │   ├── middleware/         # JWT auth (async FromRequest) + request context
+│   │   ├── errors/             # AppError enum → HTTP status code mapping
+│   │   ├── logging/            # Structured JSON logging with Category enum
+│   │   └── validation/         # garde validators + custom validation functions
+│   └── tests/                  # Integration tests (29 tests)
+├── migration/                  # SeaORM migrations (users, projects, tasks)
+├── docker-compose.yml          # PostgreSQL + Redis + API (zero-config)
+├── Dockerfile                  # Multi-stage build (~25MB final image)
+├── seed.sql                    # Test data (1 user, 1 project, 3 tasks)
+└── postman/                    # Postman collection for API testing
 ```
 
 ## Running Locally
@@ -63,19 +69,30 @@ api/src/
 
 ```bash
 # Clone the repository
-git clone https://github.com/ambujkumar/taskflow-ambuj
+git clone https://github.com/ambuj14sept/taskflow-ambuj.git
 cd taskflow-ambuj
 
-# Copy environment file
-cp .env.example .env
-
-# Start all services
+# Start all services (no .env file needed — all config is in docker-compose.yml)
 docker compose up --build
 ```
 
-The API will be available at http://localhost:8080
+The API will be available at **http://localhost:8080**
+
+All environment variables are configured inline in `docker-compose.yml` — no manual setup required. `docker compose up` handles everything:
+1. Pulls PostgreSQL and Redis images
+2. Builds the Rust API (multi-stage Docker build)
+3. Starts PostgreSQL and Redis, waits for health checks
+4. Starts the API, runs database migrations automatically
+5. API ready to accept requests
 
 ### Environment Variables
+
+For local development outside Docker, copy `.env.example`:
+
+```bash
+cp .env.example .env
+cargo run -p api
+```
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -88,238 +105,141 @@ The API will be available at http://localhost:8080
 | `REDIS_HOST` | Redis host | `redis` |
 | `REDIS_PORT` | Redis port | `6379` |
 | `JWT_SECRET` | JWT signing secret | **Required** |
-| `JWT_EXPIRY_HOURS` | Token validity | `24` |
-| `BCRYPT_COST` | Password hash cost | `12` |
+| `JWT_EXPIRY_HOURS` | Token validity (hours) | `24` |
+| `BCRYPT_COST` | Password hash cost factor | `12` |
 | `SERVER_HOST` | Server bind address | `0.0.0.0` |
 | `SERVER_PORT` | Server port | `8080` |
 | `ENV` | Environment name | `dev` |
 
-## Running Migrations
+## Database Migrations
 
-Migrations run automatically on container startup. No manual steps required.
+Migrations run **automatically** on container startup via `Migrator::up()` in `AppState::new()`. No manual steps required.
 
-To run manually (for development):
-```bash
-cargo run -p migration
-```
+Three migration files create the schema:
+1. `m20260414_000001_create_users_table` — users with bcrypt passwords
+2. `m20260414_000002_create_projects_table` — projects with owner FK
+3. `m20260414_000003_create_tasks_table` — tasks with status, priority, assignee, creator FKs + indexes
+
+All migrations have both UP (create) and DOWN (drop) directions for full reversibility.
 
 ## Test Credentials
+
+Seed data is included for immediate testing:
 
 ```
 Email:    test@example.com
 Password: password123
 ```
 
-Run the seed script after migrations:
+To load seed data:
 ```bash
 docker compose exec postgres psql -U taskflow -d taskflow -f /app/seed.sql
 ```
 
+This creates 1 user, 1 project, and 3 tasks (todo, in_progress, done).
+
+## Running Tests
+
+The project includes **29 integration tests** covering auth, projects, and tasks.
+
+Tests require PostgreSQL and Redis running (from docker compose):
+
+```bash
+# Start database and redis
+docker compose up postgres redis -d
+
+# Run tests (point to docker-mapped ports)
+DB_HOST=localhost DB_PORT=5432 DB_USER=taskflow DB_PASSWORD=taskflow_secret DB_NAME=taskflow \
+REDIS_HOST=localhost REDIS_PORT=6379 \
+JWT_SECRET=test-secret \
+ENV=test \
+cargo test --package api -- --test-threads=1
+```
+
+### Test Coverage
+
+| Suite | Tests | What's Covered |
+|-------|-------|----------------|
+| **Auth** | 9 | Register (success, validation, duplicate email), Login (success, wrong password, nonexistent), Logout (session invalidation), Protected routes (no token, invalid token) |
+| **Projects** | 9 | Create (success, validation), List (with pagination), Get detail (with tasks, 404), Update/Delete (owner-only → 403), Stats (by_status, by_assignee) |
+| **Tasks** | 11 | Create (success, defaults, validation), List (status filter, pagination), Update (fields + updated_at, invalid status), Delete (by creator, non-owner rejected), Cascade delete, Invalid filter |
+
 ## API Reference
 
-### Authentication
+### Authentication (public — no token required)
 
 #### POST /auth/register
-Register a new user.
-
 ```json
 // Request
-{
-    "name": "Jane Doe",
-    "email": "jane@example.com",
-    "password": "secret123"
-}
+{ "name": "Jane Doe", "email": "jane@example.com", "password": "secret123" }
 
 // Response 201
-{
-    "token": "<jwt>",
-    "user": {
-        "id": "uuid",
-        "name": "Jane Doe",
-        "email": "jane@example.com"
-    }
-}
+{ "token": "<jwt>", "user": { "id": "uuid", "name": "Jane Doe", "email": "jane@example.com" } }
 ```
 
 #### POST /auth/login
-Authenticate and receive a JWT.
-
 ```json
 // Request
-{
-    "email": "jane@example.com",
-    "password": "secret123"
-}
+{ "email": "jane@example.com", "password": "secret123" }
 
 // Response 200
-{
-    "token": "<jwt>",
-    "user": { "id": "uuid", "name": "Jane Doe", "email": "jane@example.com" }
-}
+{ "token": "<jwt>", "user": { "id": "uuid", "name": "Jane Doe", "email": "jane@example.com" } }
 ```
 
 #### POST /auth/logout
-Invalidate the current session.
-
 **Headers:** `Authorization: Bearer <token>`
-
 ```json
 // Response 200
 { "message": "logged out successfully" }
 ```
 
-### Projects
+### Projects (all require `Authorization: Bearer <token>`)
 
-All project endpoints require authentication.
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/projects?page=1&limit=10` | List projects user owns or has tasks in |
+| POST | `/projects` | Create project (owner = current user) |
+| GET | `/projects/:id` | Project details + all tasks |
+| PATCH | `/projects/:id` | Update name/description (owner only → 403) |
+| DELETE | `/projects/:id` | Delete project + cascade tasks (owner only → 403) |
+| GET | `/projects/:id/stats` | Task counts by status and assignee |
 
-#### GET /projects
-List projects the user owns or has tasks in.
+### Tasks (all require `Authorization: Bearer <token>`)
 
-**Query Parameters:**
-- `page` (optional): Page number (default: 1)
-- `limit` (optional): Items per page (default: 10, max: 100)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/projects/:id/tasks?status=todo&assignee=uuid&page=1&limit=10` | List with filters + pagination |
+| POST | `/projects/:id/tasks` | Create task (creator_id = current user, status defaults to "todo") |
+| PATCH | `/tasks/:id` | Update fields (title, description, status, priority, assignee, due_date) |
+| DELETE | `/tasks/:id` | Delete (project owner or task creator only) |
 
-```json
-// Response 200
-{
-    "projects": [
-        {
-            "id": "uuid",
-            "name": "My Project",
-            "description": "Project description",
-            "owner_id": "uuid",
-            "created_at": "2026-04-14T10:00:00Z"
-        }
-    ],
-    "pagination": {
-        "page": 1,
-        "limit": 10,
-        "total": 1,
-        "total_pages": 1
-    }
-}
-```
+### Error Responses
 
-#### POST /projects
-Create a new project.
-
-```json
-// Request
-{
-    "name": "New Project",
-    "description": "Optional description"
-}
-
-// Response 201
-{ "id": "uuid", "name": "New Project", ... }
-```
-
-#### GET /projects/:id
-Get project details with all tasks.
-
-#### PATCH /projects/:id
-Update project (owner only).
-
-```json
-// Request
-{ "name": "Updated Name" }
-```
-
-#### DELETE /projects/:id
-Delete project and all tasks (owner only).
-
-#### GET /projects/:id/stats
-Get task statistics for a project.
-
-```json
-// Response 200
-{
-    "by_status": { "todo": 5, "in_progress": 3, "done": 2 },
-    "by_assignee": { "uuid": 4, "unassigned": 6 },
-    "total": 10
-}
-```
-
-### Tasks
-
-#### GET /projects/:id/tasks
-List tasks with optional filters.
-
-**Query Parameters:**
-- `status` (optional): Filter by status (`todo`, `in_progress`, `done`)
-- `assignee` (optional): Filter by assignee UUID
-- `page`, `limit`: Pagination
-
-#### POST /projects/:id/tasks
-Create a task.
-
-```json
-// Request
-{
-    "title": "Task title",
-    "description": "Optional description",
-    "priority": "high",
-    "assignee_id": "uuid",
-    "due_date": "2026-04-30"
-}
-```
-
-#### PATCH /tasks/:id
-Update a task.
-
-```json
-// Request
-{
-    "title": "Updated title",
-    "status": "done",
-    "priority": "low"
-}
-```
-
-#### DELETE /tasks/:id
-Delete a task (project owner or task creator only).
-
-## Error Responses
-
-```json
-// 400 Validation Error
-{
-    "error": "validation failed",
-    "fields": {
-        "email": "invalid email format",
-        "password": "must be at least 8 characters"
-    }
-}
-
-// 401 Unauthorized
-{ "error": "unauthorized" }
-
-// 403 Forbidden
-{ "error": "forbidden" }
-
-// 404 Not Found
-{ "error": "not found" }
-
-// 500 Internal Error
-{ "error": "internal server error" }
-```
+| Status | When | Response |
+|--------|------|----------|
+| 400 | Validation failure | `{ "error": "validation failed", "fields": { "email": "invalid email format" } }` |
+| 401 | No token / invalid token / expired session | `{ "error": "unauthorized" }` |
+| 401 | Wrong email or password | `{ "error": "invalid email or password" }` |
+| 403 | Valid user but not permitted | `{ "error": "forbidden" }` |
+| 404 | Resource not found | `{ "error": "not found" }` |
+| 409 | Duplicate email | `{ "error": "conflict: email already exists" }` |
 
 ## Postman Collection
 
-Import `postman/taskflow.postman_collection.json` into Postman for interactive API testing.
+Import `postman/taskflow.postman_collection.json` into Postman for interactive API testing. The collection includes pre-request scripts that automatically capture the JWT token from login/register responses.
 
 ## What I'd Do With More Time
 
-1. **Integration Tests**: Add comprehensive test suite covering all endpoints and edge cases
-2. **Rate Limiting**: Implement request rate limiting per user/IP
-3. **Email Verification**: Add email confirmation for new accounts
-4. **Password Reset**: Implement password reset flow via email
-5. **Task Comments**: Allow users to comment on tasks
-6. **File Attachments**: Support file uploads for tasks
-7. **WebSocket Notifications**: Real-time updates for task changes
-8. **Audit Logging**: Track all data changes for compliance
-9. **OpenAPI Documentation**: Generate Swagger/OpenAPI spec from code
-10. **CI/CD Pipeline**: GitHub Actions for automated testing and deployment
+1. **Rate Limiting** — Request throttling per user/IP to prevent abuse
+2. **Email Verification** — Confirm email ownership before account activation
+3. **Password Reset** — Secure password reset flow via email
+4. **Task Comments** — Allow users to comment on tasks
+5. **WebSocket Notifications** — Real-time updates when tasks change
+6. **Audit Logging** — Track all data changes with who/when/what
+7. **OpenAPI/Swagger** — Auto-generated API documentation from code
+8. **CI/CD Pipeline** — GitHub Actions for automated testing and deployment
+9. **Session Management** — List active sessions, "logout from all devices"
+10. **Task Attachments** — File uploads for tasks
 
 ## License
 
