@@ -73,17 +73,70 @@ git clone https://github.com/ambuj14sept/taskflow-ambuj.git
 cd taskflow-ambuj
 
 # Start all services (no .env file needed — all config is in docker-compose.yml)
-docker compose up --build
+docker compose up --build -d
+
+# Wait for services to be healthy
+sleep 10
+
+# Seed test data
+cat seed.sql | docker exec -i taskflow-postgres psql -U taskflow -d taskflow
+
+# Verify the API is running
+curl -s http://localhost:9090/health
+# Expected: {"status":"healthy"}
 ```
 
 The API will be available at **http://localhost:9090**
 
-All environment variables are configured inline in `docker-compose.yml` — no manual setup required. `docker compose up` handles everything:
+> **Note:** If port 9090 is taken on your machine, change the left side of the port mapping in `docker-compose.yml` (e.g., `"3000:9090"`) and access the API on that port instead.
+
+All environment variables are configured inline in `docker-compose.yml` — no manual setup required. `docker compose up --build -d` handles everything:
 1. Pulls PostgreSQL and Redis images
 2. Builds the Rust API (multi-stage Docker build)
 3. Starts PostgreSQL and Redis, waits for health checks
 4. Starts the API, runs database migrations automatically
 5. API ready to accept requests
+
+### Testing the API
+
+Import the Postman collection from `postman/taskflow.postman_collection.json` into Postman:
+1. Open Postman → Import → Upload File → select `postman/taskflow.postman_collection.json`
+2. The `base_url` variable is set to `http://localhost:9090` — change it if you used a different port
+3. Run **Login** or **Register** first — the token is captured automatically and used by all other requests
+
+Or use curl:
+
+```bash
+# Register a new user
+curl -s -X POST http://localhost:9090/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Jane Doe","email":"jane@example.com","password":"secret123"}'
+
+# Login and save the token
+TOKEN=$(curl -s -X POST http://localhost:9090/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com","password":"password123"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+
+# Create a project
+curl -s -X POST http://localhost:9090/projects \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"My Project","description":"A test project"}'
+
+# List projects
+curl -s http://localhost:9090/projects \
+  -H "Authorization: Bearer $TOKEN"
+
+# Create a task (replace PROJECT_ID with the id from create project response)
+curl -s -X POST http://localhost:9090/projects/PROJECT_ID/tasks \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"My first task","priority":"high","due_date":"2026-05-01"}'
+
+# Logout
+curl -s -X POST http://localhost:9090/auth/logout \
+  -H "Authorization: Bearer $TOKEN"
+```
 
 ### Environment Variables
 
@@ -133,7 +186,7 @@ Password: password123
 
 To load seed data:
 ```bash
-docker compose exec postgres psql -U taskflow -d taskflow -f /app/seed.sql
+cat seed.sql | docker exec -i taskflow-postgres psql -U taskflow -d taskflow
 ```
 
 This creates 1 user, 1 project, and 3 tasks (todo, in_progress, done).
@@ -201,7 +254,7 @@ cargo test --package api -- --test-threads=1
 | POST | `/projects` | Create project (owner = current user) |
 | GET | `/projects/:id` | Project details + all tasks |
 | PATCH | `/projects/:id` | Update name/description (owner only → 403) |
-| DELETE | `/projects/:id` | Delete project + cascade tasks (owner only → 403) |
+| DELETE | `/projects/:id` | Delete project + cascade tasks (owner only → 403), 404 if not found |
 | GET | `/projects/:id/stats` | Task counts by status and assignee |
 
 ### Tasks (all require `Authorization: Bearer <token>`)
@@ -211,7 +264,7 @@ cargo test --package api -- --test-threads=1
 | GET | `/projects/:id/tasks?status=todo&assignee=uuid&page=1&limit=10` | List with filters + pagination |
 | POST | `/projects/:id/tasks` | Create task (creator_id = current user, status defaults to "todo") |
 | PATCH | `/tasks/:id` | Update fields (title, description, status, priority, assignee, due_date) |
-| DELETE | `/tasks/:id` | Delete (project owner or task creator only) |
+| DELETE | `/tasks/:id` | Delete (project owner or task creator only), 404 if not found or not permitted |
 
 ### Error Responses
 
@@ -223,10 +276,6 @@ cargo test --package api -- --test-threads=1
 | 403 | Valid user but not permitted | `{ "error": "forbidden" }` |
 | 404 | Resource not found | `{ "error": "not found" }` |
 | 409 | Duplicate email | `{ "error": "conflict: email already exists" }` |
-
-## Postman Collection
-
-Import `postman/taskflow.postman_collection.json` into Postman for interactive API testing. The collection includes pre-request scripts that automatically capture the JWT token from login/register responses.
 
 ## What I'd Do With More Time
 

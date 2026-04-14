@@ -14,6 +14,16 @@
       "key": "token",
       "value": "",
       "type": "string"
+    },
+    {
+      "key": "project_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "task_id",
+      "value": "",
+      "type": "string"
     }
   ],
   "item": [
@@ -29,7 +39,7 @@
                 "exec": [
                   "var response = pm.response.json();",
                   "if (response.token) {",
-                  "    pm.environment.set('token', response.token);",
+                  "    pm.collectionVariables.set('token', response.token);",
                   "}"
                 ]
               }
@@ -63,7 +73,7 @@
                 "exec": [
                   "var response = pm.response.json();",
                   "if (response.token) {",
-                  "    pm.environment.set('token', response.token);",
+                  "    pm.collectionVariables.set('token', response.token);",
                   "}"
                 ]
               }
@@ -146,7 +156,7 @@
                 "exec": [
                   "var response = pm.response.json();",
                   "if (response.id) {",
-                  "    pm.environment.set('project_id', response.id);",
+                  "    pm.collectionVariables.set('project_id', response.id);",
                   "}"
                 ]
               }
@@ -302,7 +312,7 @@
                 "exec": [
                   "var response = pm.response.json();",
                   "if (response.id) {",
-                  "    pm.environment.set('task_id', response.id);",
+                  "    pm.collectionVariables.set('task_id', response.id);",
                   "}"
                 ]
               }
