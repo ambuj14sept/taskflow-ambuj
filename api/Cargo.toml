@@ -33,4 +33,7 @@ migration = { path = "../migration" }
 
 [dev-dependencies]
 actix-rt.workspace = true
+actix-http = "3"
 reqwest.workspace = true
+dotenv.workspace = true
+uuid.workspace = true
