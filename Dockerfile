@@ -32,7 +32,7 @@ RUN touch api/src/main.rs api/src/lib.rs migration/src/lib.rs && \
 FROM alpine:3.19
 
 # Install runtime dependencies
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata curl
 
 WORKDIR /app
 
