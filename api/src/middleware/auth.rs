@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::config::global_state::AppState;
 use crate::errors::AppError;
+use crate::types::common::session_key;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AuthenticatedUser {
@@ -25,12 +26,10 @@ impl FromRequest for AuthenticatedUser {
         let req = req.clone();
 
         Box::pin(async move {
-            // Get AppState from app_data
             let state = req
                 .app_data::<web::Data<AppState>>()
                 .ok_or(AppError::InternalError("AppState not configured".to_string()))?;
 
-            // Extract JWT from Authorization header
             let auth_header = req
                 .headers()
                 .get("Authorization")
@@ -43,7 +42,6 @@ impl FromRequest for AuthenticatedUser {
 
             let token = &auth_header[7..];
 
-            // Decode and validate JWT
             let token_data = jsonwebtoken::decode::<JwtClaims>(
                 token,
                 &jsonwebtoken::DecodingKey::from_secret(state.config.jwt_secret.as_bytes()),
@@ -53,8 +51,7 @@ impl FromRequest for AuthenticatedUser {
 
             let claims = token_data.claims;
 
-            // Validate session exists in Redis
-            let key = format!("session:{}", claims.session_id);
+            let key = session_key(&claims.session_id);
             let mut redis = state.redis.clone();
             let stored_user_id: Option<String> = redis.get(&key).await?;
 
@@ -63,7 +60,6 @@ impl FromRequest for AuthenticatedUser {
                     let parsed_id = Uuid::parse_str(&id)
                         .map_err(|_| AppError::InternalError("Invalid session data".to_string()))?;
 
-                    // Verify user_id in Redis matches JWT
                     if parsed_id != claims.user_id {
                         return Err(AppError::Unauthorized);
                     }
@@ -74,7 +70,7 @@ impl FromRequest for AuthenticatedUser {
                         session_id: claims.session_id,
                     })
                 }
-                None => Err(AppError::Unauthorized), // Session expired or invalidated
+                None => Err(AppError::Unauthorized),
             }
         })
     }
@@ -124,7 +120,7 @@ pub async fn create_session(
     user_id: &Uuid,
     expiry_hours: u64,
 ) -> Result<(), AppError> {
-    let key = format!("session:{}", session_id);
+    let key = session_key(session_id);
     let expiry_seconds = expiry_hours * 3600;
 
     let _: () = redis
@@ -139,7 +135,7 @@ pub async fn delete_session(
     redis: &mut redis::aio::MultiplexedConnection,
     session_id: &Uuid,
 ) -> Result<(), AppError> {
-    let key = format!("session:{}", session_id);
+    let key = session_key(session_id);
     let _: () = redis.del(&key).await?;
     Ok(())
 }

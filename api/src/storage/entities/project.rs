@@ -11,6 +11,7 @@ pub struct Model {
     pub description: Option<String>,
     pub owner_id: Uuid,
     pub created_at: DateTime<Utc>,
+    pub is_active: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

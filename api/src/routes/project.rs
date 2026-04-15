@@ -1,47 +1,18 @@
 use actix_web::{web, HttpResponse};
-use serde::Serialize;
 use uuid::Uuid;
 
 use crate::config::global_state::AppState;
 use crate::errors::AppError;
 use crate::middleware::auth::AuthenticatedUser;
-use crate::storage::queries::project::{self, Pagination};
-use crate::validation::custom::{validate_request, CreateProjectRequest, PaginationQuery, UpdateProjectRequest};
-
-#[derive(Debug, Serialize)]
-pub struct ProjectResponse {
-    pub id: Uuid,
-    pub name: String,
-    pub description: Option<String>,
-    pub owner_id: Uuid,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-}
-
-impl From<crate::storage::entities::project::Model> for ProjectResponse {
-    fn from(model: crate::storage::entities::project::Model) -> Self {
-        Self {
-            id: model.id,
-            name: model.name,
-            description: model.description,
-            owner_id: model.owner_id,
-            created_at: model.created_at,
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
-pub struct PaginatedProjectsResponse {
-    pub projects: Vec<ProjectResponse>,
-    pub pagination: PaginationMeta,
-}
-
-#[derive(Debug, Serialize)]
-pub struct PaginationMeta {
-    pub page: u64,
-    pub limit: u64,
-    pub total: u64,
-    pub total_pages: u64,
-}
+use crate::storage::queries::access;
+use crate::storage::queries::project;
+use crate::storage::queries::task;
+use crate::types::common::{validate_request, Pagination, PaginationMeta, PaginationQuery};
+use crate::types::project::{
+    CreateProjectRequest, PaginatedProjectsResponse, ProjectDetailResponse, ProjectResponse,
+    UpdateProjectRequest,
+};
+use crate::types::task::TaskResponse;
 
 /// GET /projects
 pub async fn list_projects(
@@ -52,16 +23,9 @@ pub async fn list_projects(
     let pagination: Pagination = query.into_inner().into();
     let result = project::list_for_user(&state.db, user.user_id, pagination).await?;
 
-    let total_pages = (result.total + pagination.limit - 1) / pagination.limit;
-
     Ok(HttpResponse::Ok().json(PaginatedProjectsResponse {
         projects: result.projects.into_iter().map(ProjectResponse::from).collect(),
-        pagination: PaginationMeta {
-            page: pagination.page,
-            limit: pagination.limit,
-            total: result.total,
-            total_pages,
-        },
+        pagination: PaginationMeta::new(pagination.page, pagination.limit, result.total),
     }))
 }
 
@@ -94,71 +58,22 @@ pub async fn get_project(
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let project_id = path.into_inner();
-    let project = project::find_by_id(&state.db, project_id)
-        .await?
-        .ok_or(AppError::NotFound)?;
+    let proj = access::check_project_access(&state.db, project_id, user.user_id).await?;
 
-    // Check if user has access (owner or has tasks in project)
-    let tasks = crate::storage::queries::task::list(
+    let task_result = task::list(
         &state.db,
         project_id,
-        crate::storage::queries::task::TaskFilters {
+        task::TaskFilters {
             status: None,
             assignee_id: None,
         },
-        Pagination::new(1, 1000), // Get all tasks for the response
+        Pagination::new(1, 1000),
     )
     .await?;
 
-    // Verify access
-    let has_access = project.owner_id == user.user_id
-        || tasks.tasks.iter().any(|t| {
-            t.assignee_id == Some(user.user_id) || t.creator_id == user.user_id
-        });
-
-    if !has_access {
-        return Err(AppError::NotFound);
-    }
-
-    #[derive(Debug, Serialize)]
-    struct ProjectDetailResponse {
-        #[serde(flatten)]
-        project: ProjectResponse,
-        tasks: Vec<TaskSummary>,
-    }
-
-    #[derive(Debug, Serialize)]
-    struct TaskSummary {
-        id: Uuid,
-        title: String,
-        description: Option<String>,
-        status: String,
-        priority: String,
-        assignee_id: Option<Uuid>,
-        creator_id: Uuid,
-        due_date: Option<chrono::NaiveDate>,
-        created_at: chrono::DateTime<chrono::Utc>,
-        updated_at: chrono::DateTime<chrono::Utc>,
-    }
-
     Ok(HttpResponse::Ok().json(ProjectDetailResponse {
-        project: ProjectResponse::from(project),
-        tasks: tasks
-            .tasks
-            .into_iter()
-            .map(|t| TaskSummary {
-                id: t.id,
-                title: t.title,
-                description: t.description,
-                status: t.status,
-                priority: t.priority,
-                assignee_id: t.assignee_id,
-                creator_id: t.creator_id,
-                due_date: t.due_date,
-                created_at: t.created_at,
-                updated_at: t.updated_at,
-            })
-            .collect(),
+        project: ProjectResponse::from(proj),
+        tasks: task_result.tasks.into_iter().map(TaskResponse::from).collect(),
     }))
 }
 
@@ -169,22 +84,14 @@ pub async fn update_project(
     path: web::Path<Uuid>,
     body: web::Json<UpdateProjectRequest>,
 ) -> Result<HttpResponse, AppError> {
-    // Validate request
     body.validate()?;
 
     let project_id = path.into_inner();
-    let project = project::find_by_id(&state.db, project_id)
-        .await?
-        .ok_or(AppError::NotFound)?;
-
-    // Check ownership
-    if project.owner_id != user.user_id {
-        return Err(AppError::Forbidden);
-    }
+    let proj = access::check_owner(&state.db, project_id, user.user_id).await?;
 
     let updated = project::update(
         &state.db,
-        project,
+        proj,
         body.name.as_deref(),
         body.description.as_deref(),
     )
@@ -200,18 +107,9 @@ pub async fn delete_project(
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let project_id = path.into_inner();
+    let proj = access::check_owner(&state.db, project_id, user.user_id).await?;
 
-    // Check project exists
-    let proj = project::find_by_id(&state.db, project_id)
-        .await?
-        .ok_or(AppError::NotFound)?;
-
-    // Check ownership
-    if proj.owner_id != user.user_id {
-        return Err(AppError::Forbidden);
-    }
-
-    project::delete(&state.db, project_id).await?;
+    project::soft_delete(&state.db, proj).await?;
 
     Ok(HttpResponse::NoContent().finish())
 }
@@ -223,30 +121,7 @@ pub async fn get_project_stats(
     path: web::Path<Uuid>,
 ) -> Result<HttpResponse, AppError> {
     let project_id = path.into_inner();
-
-    // Verify project exists and user has access
-    let project = project::find_by_id(&state.db, project_id)
-        .await?
-        .ok_or(AppError::NotFound)?;
-
-    // Check access
-    if project.owner_id != user.user_id {
-        // Check if user has tasks in this project
-        let tasks = crate::storage::queries::task::list(
-            &state.db,
-            project_id,
-            crate::storage::queries::task::TaskFilters {
-                status: None,
-                assignee_id: Some(user.user_id),
-            },
-            Pagination::new(1, 1),
-        )
-        .await?;
-
-        if tasks.total == 0 {
-            return Err(AppError::NotFound);
-        }
-    }
+    access::check_project_access(&state.db, project_id, user.user_id).await?;
 
     let stats = project::get_stats(&state.db, project_id).await?;
 

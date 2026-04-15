@@ -37,22 +37,42 @@ SeaORM provides async database access with compile-time query checking. Its migr
 ### Why Raw Redis Crate
 The raw `redis` crate with `MultiplexedConnection` is sufficient for our session workload (GET/SET/DEL with TTL). A connection pool (`deadpool-redis`) would add complexity without meaningful benefit at this scale.
 
+### Why SCREAMING_SNAKE_CASE for Enums
+All enum values (status: `TODO`, `IN_PROGRESS`, `DONE` / priority: `LOW`, `MEDIUM`, `HIGH`) use SCREAMING_SNAKE_CASE consistently across API requests, API responses, and database storage. This is enforced via `strum` derive macros, eliminating manual string conversion and preventing casing inconsistencies.
+
+### Why Soft Delete
+Projects and tasks use soft delete (`is_active = false`) instead of hard delete. This preserves data for audit trails, allows recovery of accidentally deleted items, and avoids foreign key cascade issues. All queries filter by `is_active = true` automatically.
+
 ### Project Structure
 ```
 taskflow-ambuj/
 ├── api/                        # Main API crate
 │   ├── src/
-│   │   ├── config/             # Config struct + AppState initialization
+│   │   ├── main.rs             # Server bootstrap, middleware stack, graceful shutdown
+│   │   ├── config/
+│   │   │   ├── settings.rs     # Config struct loaded from environment variables
+│   │   │   └── global_state.rs # AppState (DB pool, Redis connection, config Arc)
+│   │   ├── types/              # Request/response DTOs + shared types
+│   │   │   ├── auth.rs         # RegisterRequest, LoginRequest, AuthResponse
+│   │   │   ├── project.rs      # Create/Update/Detail/Stats project DTOs
+│   │   │   ├── task.rs         # Create/Update/Filter/List task DTOs
+│   │   │   ├── enums.rs        # TaskStatus, TaskPriority (strum + serde SCREAMING_SNAKE_CASE)
+│   │   │   └── common.rs       # Pagination, PaginationMeta, validate_request helper
 │   │   ├── routes/             # HTTP handlers (auth, projects, tasks)
 │   │   ├── storage/
-│   │   │   ├── entities/       # SeaORM models (user, project, task)
-│   │   │   └── queries/        # Database operations per table
-│   │   ├── middleware/         # JWT auth (async FromRequest) + request context
+│   │   │   ├── entities/       # SeaORM entity models (user, project, task)
+│   │   │   └── queries/        # Database operations (user, project, task, access)
+│   │   │       └── access.rs   # Project access checks (owner, assignee, creator)
+│   │   ├── middleware/
+│   │   │   ├── auth.rs         # JWT + Redis session (async FromRequest extractor)
+│   │   │   └── request_context.rs # Request-scoped context (request ID, session ID)
 │   │   ├── errors/             # AppError enum → HTTP status code mapping
-│   │   ├── logging/            # Structured JSON logging with Category enum
-│   │   └── validation/         # garde validators + custom validation functions
+│   │   ├── logging/
+│   │   │   ├── formatter.rs    # Structured JSON log formatter, request counter
+│   │   │   └── types.rs        # LogEntry, Category (DB/Redis/API/System), Level
+│   │   └── validation/         # Placeholder for future custom validators
 │   └── tests/                  # Integration tests (29 tests)
-├── migration/                  # SeaORM migrations (users, projects, tasks)
+├── migration/                  # SeaORM migrations (users, projects, tasks, soft delete)
 ├── docker-compose.yml          # PostgreSQL + Redis + API (zero-config)
 ├── Dockerfile                  # Multi-stage build (~25MB final image)
 ├── seed.sql                    # Test data (1 user, 1 project, 3 tasks)
@@ -131,7 +151,7 @@ curl -s http://localhost:9090/projects \
 curl -s -X POST http://localhost:9090/projects/PROJECT_ID/tasks \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"title":"My first task","priority":"high","due_date":"2026-05-01"}'
+  -d '{"title":"My first task","priority":"HIGH","due_date":"2026-05-01"}'
 
 # Logout
 curl -s -X POST http://localhost:9090/auth/logout \
@@ -157,6 +177,8 @@ cargo run -p api
 | `DB_POOL_SIZE` | Connection pool size | `10` |
 | `REDIS_HOST` | Redis host | `redis` |
 | `REDIS_PORT` | Redis port | `6379` |
+| `REDIS_PASSWORD` | Redis password (empty = no auth) | *(empty)* |
+| `REDIS_DB` | Redis database number | `0` |
 | `JWT_SECRET` | JWT signing secret | **Required** |
 | `JWT_EXPIRY_HOURS` | Token validity (hours) | `24` |
 | `BCRYPT_COST` | Password hash cost factor | `12` |
@@ -168,10 +190,11 @@ cargo run -p api
 
 Migrations run **automatically** on container startup via `Migrator::up()` in `AppState::new()`. No manual steps required.
 
-Three migration files create the schema:
+Four migration files create and evolve the schema:
 1. `m20260414_000001_create_users_table` — users with bcrypt passwords
 2. `m20260414_000002_create_projects_table` — projects with owner FK
 3. `m20260414_000003_create_tasks_table` — tasks with status, priority, assignee, creator FKs + indexes
+4. `m20260414_000004_add_soft_delete_and_update_enums` — adds `is_active` column to projects and tasks, drops low-cardinality status index
 
 All migrations have both UP (create) and DOWN (drop) directions for full reversibility.
 
@@ -195,19 +218,56 @@ This creates 1 user, 1 project, and 3 tasks (todo, in_progress, done).
 
 The project includes **29 integration tests** covering auth, projects, and tasks.
 
-Tests require PostgreSQL and Redis running (from docker compose):
+### Prerequisites
+
+1. **PostgreSQL** running and accessible from your machine
+2. **Redis** running and accessible from your machine
+3. A `.env.test` file in the project root configured to point to your PostgreSQL and Redis instances
+
+Tests connect directly to PostgreSQL and Redis — no Docker is required. As long as both services are reachable at the host/port specified in `.env.test`, the tests will work.
+
+> **Note:** Migrations run automatically when the test `AppState` is created — no manual schema setup needed. The database schema is created by `Migrator::up()` in `AppState::new()`.
+
+### How Test Configuration Works
+
+Tests load environment variables from `.env.test` only:
+
+```rust
+dotenvy::from_filename(".env.test").ok();
+```
+
+`.env.test` is a self-contained config file for tests — it does not depend on `.env`. Just make sure the `DB_HOST`, `DB_PORT`, `REDIS_HOST`, and `REDIS_PORT` values point to your running PostgreSQL and Redis instances.
+
+The `.env.test` file isolates test data by using `REDIS_DB=1` (separate Redis keyspace from the running API) and a lower `BCRYPT_COST=4` (faster hashing in tests).
+
+If your PostgreSQL or Redis runs on non-default ports, just update `.env.test`:
+```bash
+DB_PORT=5434       # Your PostgreSQL port
+REDIS_PORT=6380    # Your Redis port
+```
+
+### Running All Tests
 
 ```bash
-# Start database and redis
-docker compose up postgres redis -d
-
-# Run tests (point to docker-mapped ports)
-DB_HOST=localhost DB_PORT=5432 DB_USER=taskflow DB_PASSWORD=taskflow_secret DB_NAME=taskflow \
-REDIS_HOST=localhost REDIS_PORT=6379 \
-JWT_SECRET=test-secret \
-ENV=test \
 cargo test --package api -- --test-threads=1
 ```
+
+### Running a Specific Test Suite
+
+```bash
+# Auth tests only
+cargo test --package api --test auth_tests -- --test-threads=1
+
+# Project tests only
+cargo test --package api --test project_tests -- --test-threads=1
+
+# Task tests only
+cargo test --package api --test task_tests -- --test-threads=1
+```
+
+### Why `--test-threads=1`?
+
+Tests share a single PostgreSQL database and Redis instance. Running them sequentially prevents race conditions (e.g., two tests inserting the same email simultaneously).
 
 ### Test Coverage
 
@@ -254,23 +314,23 @@ cargo test --package api -- --test-threads=1
 | POST | `/projects` | Create project (owner = current user) |
 | GET | `/projects/:id` | Project details + all tasks |
 | PATCH | `/projects/:id` | Update name/description (owner only → 403) |
-| DELETE | `/projects/:id` | Delete project + cascade tasks (owner only → 403), 404 if not found |
+| DELETE | `/projects/:id` | Soft delete project + cascade soft-delete tasks (owner only → 403), 404 if not found |
 | GET | `/projects/:id/stats` | Task counts by status and assignee |
 
 ### Tasks (all require `Authorization: Bearer <token>`)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/projects/:id/tasks?status=todo&assignee=uuid&page=1&limit=10` | List with filters + pagination |
-| POST | `/projects/:id/tasks` | Create task (creator_id = current user, status defaults to "todo") |
-| PATCH | `/tasks/:id` | Update fields (title, description, status, priority, assignee, due_date) |
-| DELETE | `/tasks/:id` | Delete (project owner or task creator only), 404 if not found or not permitted |
+| GET | `/projects/:id/tasks?status=TODO&assignee=uuid&page=1&limit=10` | List with filters + pagination. Status values: `TODO`, `IN_PROGRESS`, `DONE` |
+| POST | `/projects/:id/tasks` | Create task (creator_id = current user, status defaults to `TODO`, priority defaults to `MEDIUM`) |
+| PATCH | `/tasks/:id` | Update fields (title, description, status, priority, assignee, due_date). Priority values: `LOW`, `MEDIUM`, `HIGH` |
+| DELETE | `/tasks/:id` | Soft delete (project owner or task creator only), 404 if not found or not permitted |
 
 ### Error Responses
 
 | Status | When | Response |
 |--------|------|----------|
-| 400 | Validation failure | `{ "error": "validation failed", "fields": { "email": "invalid email format" } }` |
+| 400 | Validation failure | `{ "error": "validation failed", "fields": { "email": "not a valid email address" } }` |
 | 401 | No token / invalid token / expired session | `{ "error": "unauthorized" }` |
 | 401 | Wrong email or password | `{ "error": "invalid email or password" }` |
 | 403 | Valid user but not permitted | `{ "error": "forbidden" }` |

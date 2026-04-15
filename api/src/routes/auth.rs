@@ -1,25 +1,12 @@
 use actix_web::{web, HttpResponse};
-use serde::Serialize;
 use uuid::Uuid;
 
 use crate::config::global_state::AppState;
 use crate::errors::AppError;
 use crate::middleware::auth::{create_session, delete_session, generate_jwt, AuthenticatedUser};
 use crate::storage::queries::user;
-use crate::validation::custom::{validate_request, LoginRequest, RegisterRequest};
-
-#[derive(Debug, Serialize)]
-pub struct UserResponse {
-    pub id: Uuid,
-    pub name: String,
-    pub email: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct AuthResponse {
-    pub token: String,
-    pub user: UserResponse,
-}
+use crate::types::auth::{AuthResponse, LoginRequest, RegisterRequest, UserResponse};
+use crate::types::common::validate_request;
 
 /// POST /auth/register
 pub async fn register(
@@ -27,27 +14,20 @@ pub async fn register(
     body: web::Json<RegisterRequest>,
 ) -> Result<HttpResponse, AppError> {
     let body = body.into_inner();
-    
-    // Validate request
     validate_request(&body)?;
 
-    // Check if email already exists
     if user::email_exists(&state.db, &body.email).await? {
         return Err(AppError::Conflict("email already exists".to_string()));
     }
 
-    // Hash password
     let password_hash = bcrypt::hash(&body.password, state.config.bcrypt_cost)?;
 
-    // Create user
     let user_id = Uuid::new_v4();
     let new_user = user::create(&state.db, user_id, &body.name, &body.email, &password_hash).await?;
 
-    // Create session
     let session_id = Uuid::new_v4();
     create_session(&mut state.redis.clone(), &session_id, &user_id, state.config.jwt_expiry_hours).await?;
 
-    // Generate JWT
     let token = generate_jwt(
         user_id,
         &body.email,
@@ -72,22 +52,17 @@ pub async fn login(
     body: web::Json<LoginRequest>,
 ) -> Result<HttpResponse, AppError> {
     let body = body.into_inner();
-    
-    // Validate request
     validate_request(&body)?;
 
-    // Find user by email
     let found_user = user::find_by_email(&state.db, &body.email)
         .await?
         .ok_or(AppError::InvalidCredentials)?;
 
-    // Verify password
     let valid = bcrypt::verify(&body.password, &found_user.password)?;
     if !valid {
         return Err(AppError::InvalidCredentials);
     }
 
-    // Create session
     let session_id = Uuid::new_v4();
     create_session(
         &mut state.redis.clone(),
@@ -97,7 +72,6 @@ pub async fn login(
     )
     .await?;
 
-    // Generate JWT
     let token = generate_jwt(
         found_user.id,
         &found_user.email,
@@ -121,7 +95,6 @@ pub async fn logout(
     state: web::Data<AppState>,
     user: AuthenticatedUser,
 ) -> Result<HttpResponse, AppError> {
-    // Delete session from Redis
     delete_session(&mut state.redis.clone(), &user.session_id).await?;
 
     Ok(HttpResponse::Ok().json(serde_json::json!({

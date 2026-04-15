@@ -17,6 +17,7 @@ pub struct Model {
     pub due_date: Option<chrono::NaiveDate>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub is_active: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -60,75 +61,3 @@ impl Related<super::user::Entity> for Entity {
 }
 
 impl ActiveModelBehavior for ActiveModel {}
-
-// Task status enum
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TaskStatus {
-    Todo,
-    InProgress,
-    Done,
-}
-
-impl TaskStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            TaskStatus::Todo => "todo",
-            TaskStatus::InProgress => "in_progress",
-            TaskStatus::Done => "done",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "todo" => Some(TaskStatus::Todo),
-            "in_progress" => Some(TaskStatus::InProgress),
-            "done" => Some(TaskStatus::Done),
-            _ => None,
-        }
-    }
-}
-
-impl std::fmt::Display for TaskStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-// Task priority enum
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TaskPriority {
-    Low,
-    Medium,
-    High,
-}
-
-impl TaskPriority {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            TaskPriority::Low => "low",
-            TaskPriority::Medium => "medium",
-            TaskPriority::High => "high",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "low" => Some(TaskPriority::Low),
-            "medium" => Some(TaskPriority::Medium),
-            "high" => Some(TaskPriority::High),
-            _ => None,
-        }
-    }
-
-    pub fn default() -> Self {
-        TaskPriority::Medium
-    }
-}
-
-impl std::fmt::Display for TaskPriority {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}

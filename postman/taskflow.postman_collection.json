@@ -291,7 +291,7 @@
                 },
                 {
                   "key": "status",
-                  "value": "todo",
+                  "value": "TODO",
                   "disabled": true
                 },
                 {
@@ -332,7 +332,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n    \"title\": \"Implement authentication\",\n    \"description\": \"Set up JWT auth with bcrypt\",\n    \"priority\": \"high\",\n    \"due_date\": \"2026-04-30\"\n}"
+              "raw": "{\n    \"title\": \"Implement authentication\",\n    \"description\": \"Set up JWT auth with bcrypt\",\n    \"priority\": \"HIGH\",\n    \"due_date\": \"2026-04-30\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/projects/{{project_id}}/tasks",
@@ -357,7 +357,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n    \"status\": \"in_progress\",\n    \"priority\": \"medium\"\n}"
+              "raw": "{\n    \"status\": \"IN_PROGRESS\",\n    \"priority\": \"MEDIUM\"\n}"
             },
             "url": {
               "raw": "{{base_url}}/tasks/{{task_id}}",

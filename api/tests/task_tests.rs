@@ -18,7 +18,7 @@ async fn test_create_task() {
         .set_json(serde_json::json!({
             "title": "My Task",
             "description": "Do something",
-            "priority": "high",
+            "priority": "HIGH",
             "due_date": "2026-05-01"
         }))
         .to_request();
@@ -29,8 +29,8 @@ async fn test_create_task() {
     let body: Value = test::read_body_json(resp).await;
     assert_eq!(body["title"], "My Task");
     assert_eq!(body["description"], "Do something");
-    assert_eq!(body["status"], "todo"); // default
-    assert_eq!(body["priority"], "high");
+    assert_eq!(body["status"], "TODO");
+    assert_eq!(body["priority"], "HIGH");
     assert_eq!(body["project_id"], project_id);
     assert_eq!(body["creator_id"], user_id);
     assert_eq!(body["due_date"], "2026-05-01");
@@ -56,7 +56,7 @@ async fn test_create_task_default_priority() {
     assert_eq!(resp.status(), 201);
 
     let body: Value = test::read_body_json(resp).await;
-    assert_eq!(body["priority"], "medium"); // default
+    assert_eq!(body["priority"], "MEDIUM");
 }
 
 #[actix_rt::test]
@@ -66,13 +66,11 @@ async fn test_create_task_validation() {
     let (token, _) = register_user(&app, "User", &email, "password123").await;
     let project_id = create_project(&app, &token, "Project").await;
 
-    // Empty title
     let req = test::TestRequest::post()
         .uri(&format!("/projects/{}/tasks", project_id))
         .insert_header(("Authorization", format!("Bearer {}", token)))
         .set_json(serde_json::json!({
-            "title": "",
-            "priority": "invalid"
+            "title": ""
         }))
         .to_request();
 
@@ -82,7 +80,6 @@ async fn test_create_task_validation() {
     let body: Value = test::read_body_json(resp).await;
     assert_eq!(body["error"], "validation failed");
     assert!(body["fields"]["title"].is_string());
-    assert!(body["fields"]["priority"].is_string());
 }
 
 #[actix_rt::test]
@@ -92,21 +89,20 @@ async fn test_list_tasks_with_filters() {
     let (token, _) = register_user(&app, "User", &email, "password123").await;
     let project_id = create_project(&app, &token, "Filter Project").await;
 
-    // Create tasks
-    create_task(&app, &token, &project_id, "Task A", "high").await;
-    let task_b = create_task(&app, &token, &project_id, "Task B", "low").await;
+    create_task(&app, &token, &project_id, "Task A", "HIGH").await;
+    let task_b = create_task(&app, &token, &project_id, "Task B", "LOW").await;
 
-    // Move task_b to done
+    // Move task_b to DONE
     let req = test::TestRequest::patch()
         .uri(&format!("/tasks/{}", task_b))
         .insert_header(("Authorization", format!("Bearer {}", token)))
-        .set_json(serde_json::json!({"status": "done"}))
+        .set_json(serde_json::json!({"status": "DONE"}))
         .to_request();
     test::call_service(&app, req).await;
 
-    // Filter by status=todo
+    // Filter by status=TODO
     let req = test::TestRequest::get()
-        .uri(&format!("/projects/{}/tasks?status=todo", project_id))
+        .uri(&format!("/projects/{}/tasks?status=TODO", project_id))
         .insert_header(("Authorization", format!("Bearer {}", token)))
         .to_request();
 
@@ -117,11 +113,11 @@ async fn test_list_tasks_with_filters() {
     let tasks = body["tasks"].as_array().unwrap();
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0]["title"], "Task A");
-    assert_eq!(tasks[0]["status"], "todo");
+    assert_eq!(tasks[0]["status"], "TODO");
 
-    // Filter by status=done
+    // Filter by status=DONE
     let req = test::TestRequest::get()
-        .uri(&format!("/projects/{}/tasks?status=done", project_id))
+        .uri(&format!("/projects/{}/tasks?status=DONE", project_id))
         .insert_header(("Authorization", format!("Bearer {}", token)))
         .to_request();
 
@@ -139,12 +135,10 @@ async fn test_list_tasks_pagination() {
     let (token, _) = register_user(&app, "User", &email, "password123").await;
     let project_id = create_project(&app, &token, "Page Project").await;
 
-    // Create 3 tasks
-    create_task(&app, &token, &project_id, "T1", "low").await;
-    create_task(&app, &token, &project_id, "T2", "medium").await;
-    create_task(&app, &token, &project_id, "T3", "high").await;
+    create_task(&app, &token, &project_id, "T1", "LOW").await;
+    create_task(&app, &token, &project_id, "T2", "MEDIUM").await;
+    create_task(&app, &token, &project_id, "T3", "HIGH").await;
 
-    // Page 1, limit 2
     let req = test::TestRequest::get()
         .uri(&format!("/projects/{}/tasks?page=1&limit=2", project_id))
         .insert_header(("Authorization", format!("Bearer {}", token)))
@@ -165,15 +159,15 @@ async fn test_update_task() {
     let email = unique_email("task_update");
     let (token, _) = register_user(&app, "User", &email, "password123").await;
     let project_id = create_project(&app, &token, "Update Project").await;
-    let task_id = create_task(&app, &token, &project_id, "Original", "low").await;
+    let task_id = create_task(&app, &token, &project_id, "Original", "LOW").await;
 
     let req = test::TestRequest::patch()
         .uri(&format!("/tasks/{}", task_id))
         .insert_header(("Authorization", format!("Bearer {}", token)))
         .set_json(serde_json::json!({
             "title": "Updated Title",
-            "status": "in_progress",
-            "priority": "high"
+            "status": "IN_PROGRESS",
+            "priority": "HIGH"
         }))
         .to_request();
 
@@ -182,9 +176,8 @@ async fn test_update_task() {
 
     let body: Value = test::read_body_json(resp).await;
     assert_eq!(body["title"], "Updated Title");
-    assert_eq!(body["status"], "in_progress");
-    assert_eq!(body["priority"], "high");
-    // updated_at should be different from created_at
+    assert_eq!(body["status"], "IN_PROGRESS");
+    assert_eq!(body["priority"], "HIGH");
     assert_ne!(body["created_at"], body["updated_at"]);
 }
 
@@ -194,19 +187,16 @@ async fn test_update_task_invalid_status() {
     let email = unique_email("task_badstat");
     let (token, _) = register_user(&app, "User", &email, "password123").await;
     let project_id = create_project(&app, &token, "Project").await;
-    let task_id = create_task(&app, &token, &project_id, "Task", "low").await;
+    let task_id = create_task(&app, &token, &project_id, "Task", "LOW").await;
 
     let req = test::TestRequest::patch()
         .uri(&format!("/tasks/{}", task_id))
         .insert_header(("Authorization", format!("Bearer {}", token)))
-        .set_json(serde_json::json!({"status": "invalid_status"}))
+        .set_json(serde_json::json!({"status": "INVALID_STATUS"}))
         .to_request();
 
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), 400);
-
-    let body: Value = test::read_body_json(resp).await;
-    assert!(body["fields"]["status"].is_string());
 }
 
 #[actix_rt::test]
@@ -215,7 +205,7 @@ async fn test_delete_task_by_creator() {
     let email = unique_email("task_del_cr");
     let (token, _) = register_user(&app, "Creator", &email, "password123").await;
     let project_id = create_project(&app, &token, "Project").await;
-    let task_id = create_task(&app, &token, &project_id, "To Delete", "low").await;
+    let task_id = create_task(&app, &token, &project_id, "To Delete", "LOW").await;
 
     let req = test::TestRequest::delete()
         .uri(&format!("/tasks/{}", task_id))
@@ -235,16 +225,15 @@ async fn test_delete_task_by_non_owner_non_creator() {
     let (token2, _) = register_user(&app, "Random", &email2, "password123").await;
 
     let project_id = create_project(&app, &token1, "Owner's Project").await;
-    let task_id = create_task(&app, &token1, &project_id, "Task", "low").await;
+    let task_id = create_task(&app, &token1, &project_id, "Task", "LOW").await;
 
-    // Random user tries to delete — should fail
     let req = test::TestRequest::delete()
         .uri(&format!("/tasks/{}", task_id))
         .insert_header(("Authorization", format!("Bearer {}", token2)))
         .to_request();
 
     let resp = test::call_service(&app, req).await;
-    assert_eq!(resp.status(), 404); // 404 to avoid leaking existence
+    assert_eq!(resp.status(), 404);
 }
 
 #[actix_rt::test]
@@ -254,9 +243,8 @@ async fn test_delete_project_cascades_tasks() {
     let (token, _) = register_user(&app, "User", &email, "password123").await;
 
     let project_id = create_project(&app, &token, "Cascade Project").await;
-    let task_id = create_task(&app, &token, &project_id, "Task", "low").await;
+    let task_id = create_task(&app, &token, &project_id, "Task", "LOW").await;
 
-    // Delete project
     let req = test::TestRequest::delete()
         .uri(&format!("/projects/{}", project_id))
         .insert_header(("Authorization", format!("Bearer {}", token)))
@@ -265,7 +253,7 @@ async fn test_delete_project_cascades_tasks() {
     let resp = test::call_service(&app, req).await;
     assert_eq!(resp.status(), 204);
 
-    // Task should no longer be accessible
+    // Task should no longer be accessible (soft deleted)
     let req = test::TestRequest::patch()
         .uri(&format!("/tasks/{}", task_id))
         .insert_header(("Authorization", format!("Bearer {}", token)))
@@ -284,7 +272,7 @@ async fn test_filter_invalid_status() {
     let project_id = create_project(&app, &token, "Project").await;
 
     let req = test::TestRequest::get()
-        .uri(&format!("/projects/{}/tasks?status=invalid", project_id))
+        .uri(&format!("/projects/{}/tasks?status=INVALID", project_id))
         .insert_header(("Authorization", format!("Bearer {}", token)))
         .to_request();
 

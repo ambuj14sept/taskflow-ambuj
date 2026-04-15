@@ -108,7 +108,7 @@ async fn test_get_project_detail() {
     let project_id = create_project(&app, &token, "Detail Project").await;
 
     // Create a task in the project
-    create_task(&app, &token, &project_id, "Task 1", "high").await;
+    create_task(&app, &token, &project_id, "Task 1", "HIGH").await;
 
     let req = test::TestRequest::get()
         .uri(&format!("/projects/{}", project_id))
@@ -220,23 +220,23 @@ async fn test_project_stats() {
     let project_id = create_project(&app, &token, "Stats Project").await;
 
     // Create tasks with different statuses
-    let task1 = create_task(&app, &token, &project_id, "Todo 1", "high").await;
-    let task2 = create_task(&app, &token, &project_id, "Todo 2", "medium").await;
-    let task3 = create_task(&app, &token, &project_id, "Todo 3", "low").await;
+    let _task1 = create_task(&app, &token, &project_id, "Todo 1", "HIGH").await;
+    let task2 = create_task(&app, &token, &project_id, "Todo 2", "MEDIUM").await;
+    let task3 = create_task(&app, &token, &project_id, "Todo 3", "LOW").await;
 
-    // Update task2 to in_progress
+    // Update task2 to IN_PROGRESS
     let req = test::TestRequest::patch()
         .uri(&format!("/tasks/{}", task2))
         .insert_header(("Authorization", format!("Bearer {}", token)))
-        .set_json(serde_json::json!({"status": "in_progress"}))
+        .set_json(serde_json::json!({"status": "IN_PROGRESS"}))
         .to_request();
     test::call_service(&app, req).await;
 
-    // Update task3 to done
+    // Update task3 to DONE
     let req = test::TestRequest::patch()
         .uri(&format!("/tasks/{}", task3))
         .insert_header(("Authorization", format!("Bearer {}", token)))
-        .set_json(serde_json::json!({"status": "done"}))
+        .set_json(serde_json::json!({"status": "DONE"}))
         .to_request();
     test::call_service(&app, req).await;
 
@@ -251,7 +251,7 @@ async fn test_project_stats() {
 
     let body: Value = test::read_body_json(resp).await;
     assert_eq!(body["total"], 3);
-    assert_eq!(body["by_status"]["todo"], 1);
-    assert_eq!(body["by_status"]["in_progress"], 1);
-    assert_eq!(body["by_status"]["done"], 1);
+    assert_eq!(body["by_status"]["TODO"], 1);
+    assert_eq!(body["by_status"]["IN_PROGRESS"], 1);
+    assert_eq!(body["by_status"]["DONE"], 1);
 }

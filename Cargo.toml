@@ -26,6 +26,9 @@ jsonwebtoken = "9"
 # Validation
 garde = { version = "0.20", features = ["derive", "email"] }
 
+# Enum utilities
+strum = { version = "0.26", features = ["derive"] }
+
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

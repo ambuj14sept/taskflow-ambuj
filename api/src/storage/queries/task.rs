@@ -1,8 +1,10 @@
 use sea_orm::*;
 use uuid::Uuid;
 
-use crate::storage::entities::task;
-use crate::storage::queries::project::Pagination;
+use crate::errors::AppError;
+use crate::storage::entities::{project, task};
+use crate::types::common::Pagination;
+use crate::types::enums::{TaskPriority, TaskStatus};
 
 pub struct TaskListResult {
     pub tasks: Vec<task::Model>,
@@ -10,10 +12,11 @@ pub struct TaskListResult {
 }
 
 pub struct TaskFilters {
-    pub status: Option<String>,
+    pub status: Option<TaskStatus>,
     pub assignee_id: Option<Uuid>,
 }
 
+/// List active tasks for a project with optional filters
 pub async fn list(
     db: &DatabaseConnection,
     project_id: Uuid,
@@ -21,10 +24,11 @@ pub async fn list(
     pagination: Pagination,
 ) -> Result<TaskListResult, DbErr> {
     let mut query = task::Entity::find()
-        .filter(task::Column::ProjectId.eq(project_id));
+        .filter(task::Column::ProjectId.eq(project_id))
+        .filter(task::Column::IsActive.eq(true));
 
     if let Some(status) = filters.status {
-        query = query.filter(task::Column::Status.eq(status));
+        query = query.filter(task::Column::Status.eq(status.to_string()));
     }
 
     if let Some(assignee_id) = filters.assignee_id {
@@ -43,8 +47,12 @@ pub async fn list(
     Ok(TaskListResult { tasks, total })
 }
 
+/// Find an active task by ID
 pub async fn find_by_id(db: &DatabaseConnection, id: Uuid) -> Result<Option<task::Model>, DbErr> {
-    task::Entity::find_by_id(id).one(db).await
+    task::Entity::find_by_id(id)
+        .filter(task::Column::IsActive.eq(true))
+        .one(db)
+        .await
 }
 
 pub async fn create(
@@ -52,8 +60,8 @@ pub async fn create(
     id: Uuid,
     title: &str,
     description: Option<&str>,
-    status: &str,
-    priority: String,
+    status: TaskStatus,
+    priority: TaskPriority,
     project_id: Uuid,
     assignee_id: Option<Uuid>,
     creator_id: Uuid,
@@ -61,34 +69,35 @@ pub async fn create(
 ) -> Result<task::Model, DbErr> {
     let now = chrono::Utc::now();
 
-    let task = task::ActiveModel {
+    let active = task::ActiveModel {
         id: Set(id),
         title: Set(title.to_string()),
         description: Set(description.map(|s| s.to_string())),
         status: Set(status.to_string()),
-        priority: Set(priority),
+        priority: Set(priority.to_string()),
         project_id: Set(project_id),
         assignee_id: Set(assignee_id),
         creator_id: Set(creator_id),
         due_date: Set(due_date),
         created_at: Set(now),
         updated_at: Set(now),
+        is_active: Set(true),
     };
 
-    task.insert(db).await
+    active.insert(db).await
 }
 
 pub async fn update(
     db: &DatabaseConnection,
-    task: task::Model,
+    existing: task::Model,
     title: Option<&str>,
     description: Option<&str>,
-    status: Option<&str>,
-    priority: Option<&str>,
+    status: Option<&TaskStatus>,
+    priority: Option<&TaskPriority>,
     assignee_id: Option<Option<Uuid>>,
     due_date: Option<Option<chrono::NaiveDate>>,
 ) -> Result<task::Model, DbErr> {
-    let mut active: task::ActiveModel = task.into();
+    let mut active: task::ActiveModel = existing.into();
 
     if let Some(t) = title {
         active.title = Set(t.to_string());
@@ -114,32 +123,30 @@ pub async fn update(
     active.update(db).await
 }
 
-pub async fn delete(db: &DatabaseConnection, id: Uuid) -> Result<DeleteResult, DbErr> {
-    task::Entity::delete_by_id(id).exec(db).await
+/// Soft delete — set is_active = false
+pub async fn soft_delete(db: &DatabaseConnection, existing: task::Model) -> Result<(), DbErr> {
+    let mut active: task::ActiveModel = existing.into();
+    active.is_active = Set(false);
+    active.update(db).await?;
+    Ok(())
 }
 
-/// Check if user can delete a task (project owner or task creator)
-pub async fn can_delete(
+/// Check if user can delete a task (project owner or task creator).
+/// Returns the task if permitted, AppError if not.
+pub async fn check_delete_permission(
     db: &DatabaseConnection,
     task_id: Uuid,
     user_id: Uuid,
-) -> Result<bool, DbErr> {
-    let task = task::Entity::find_by_id(task_id)
-        .find_also_related(crate::storage::entities::project::Entity)
+) -> Result<task::Model, AppError> {
+    let result = task::Entity::find_by_id(task_id)
+        .filter(task::Column::IsActive.eq(true))
+        .find_also_related(project::Entity)
         .one(db)
         .await?;
 
-    match task {
-        Some((task, Some(project))) => {
-            // User is task creator or project owner
-            Ok(task.creator_id == user_id || project.owner_id == user_id)
-        }
-        _ => Ok(false),
+    match result {
+        Some((t, Some(p))) if t.creator_id == user_id || p.owner_id == user_id => Ok(t),
+        Some(_) => Err(AppError::NotFound), // Don't leak existence
+        None => Err(AppError::NotFound),
     }
-}
-
-/// Get project ID for a task
-pub async fn get_project_id(db: &DatabaseConnection, task_id: Uuid) -> Result<Option<Uuid>, DbErr> {
-    let task = task::Entity::find_by_id(task_id).one(db).await?;
-    Ok(task.map(|t| t.project_id))
 }

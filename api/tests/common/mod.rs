@@ -6,11 +6,15 @@ use api::routes;
 use serde_json::Value;
 
 /// Create a test app with full middleware stack.
-/// Requires PostgreSQL and Redis running (from docker compose).
+/// Requires PostgreSQL and Redis running.
+///
+/// Loads configuration from `.env.test` only — no `.env` dependency.
+/// Uses `from_filename_override` so `.env.test` values always take
+/// precedence over any existing environment variables.
 pub async fn create_test_app(
 ) -> impl actix_web::dev::Service<actix_http::Request, Response = actix_web::dev::ServiceResponse, Error = actix_web::Error>
 {
-    dotenv::dotenv().ok();
+    dotenvy::from_filename_override(".env.test").ok();
     let config = Config::from_env();
     let state = AppState::new(config)
         .await

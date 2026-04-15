@@ -4,4 +4,5 @@ pub mod logging;
 pub mod middleware;
 pub mod routes;
 pub mod storage;
+pub mod types;
 pub mod validation;
