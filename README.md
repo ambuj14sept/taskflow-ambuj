@@ -76,7 +76,7 @@ taskflow-ambuj/
 ├── docker-compose.yml          # PostgreSQL + Redis + API (zero-config)
 ├── Dockerfile                  # Multi-stage build (~25MB final image)
 ├── seed.sql                    # Test data (1 user, 1 project, 3 tasks)
-└── postman/                    # Postman collection for API testing
+└── postman/                    # Postman collection + environment for API testing
 ```
 
 ## Running Locally
@@ -119,10 +119,12 @@ All environment variables are configured inline in `docker-compose.yml` — no m
 
 ### Testing the API
 
-Import the Postman collection from `postman/taskflow.postman_collection.json` into Postman:
+Import the Postman collection and environment:
 1. Open Postman → Import → Upload File → select `postman/taskflow.postman_collection.json`
-2. The `base_url` variable is set to `http://localhost:9090` — change it if you used a different port
-3. Run **Login** or **Register** first — the token is captured automatically and used by all other requests
+2. Import → Upload File → select `postman/taskflow-local.postman_environment.json`
+3. Select the **TaskFlow - Local** environment from the dropdown (top-right)
+4. The `base_url` is set to `http://localhost:9090` — change it if you used a different port
+5. Run **Login** or **Register** first — the token is captured automatically and used by all other requests
 
 Or use curl:
 
@@ -331,6 +333,7 @@ Tests share a single PostgreSQL database and Redis instance. Running them sequen
 | Status | When | Response |
 |--------|------|----------|
 | 400 | Validation failure | `{ "error": "validation failed", "fields": { "email": "not a valid email address" } }` |
+| 400 | Foreign key violation (e.g., assignee_id doesn't exist) | `{ "error": "assignee_id does not exist" }` |
 | 401 | No token / invalid token / expired session | `{ "error": "unauthorized" }` |
 | 401 | Wrong email or password | `{ "error": "invalid email or password" }` |
 | 403 | Valid user but not permitted | `{ "error": "forbidden" }` |

@@ -4,28 +4,6 @@
     "description": "Task management system API - Users can register, create projects, add tasks, and assign tasks.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
-  "variable": [
-    {
-      "key": "base_url",
-      "value": "http://localhost:9090",
-      "type": "string"
-    },
-    {
-      "key": "token",
-      "value": "",
-      "type": "string"
-    },
-    {
-      "key": "project_id",
-      "value": "",
-      "type": "string"
-    },
-    {
-      "key": "task_id",
-      "value": "",
-      "type": "string"
-    }
-  ],
   "item": [
     {
       "name": "Auth",
@@ -39,7 +17,7 @@
                 "exec": [
                   "var response = pm.response.json();",
                   "if (response.token) {",
-                  "    pm.collectionVariables.set('token', response.token);",
+                  "    pm.environment.set('token', response.token);",
                   "}"
                 ]
               }
@@ -73,7 +51,7 @@
                 "exec": [
                   "var response = pm.response.json();",
                   "if (response.token) {",
-                  "    pm.collectionVariables.set('token', response.token);",
+                  "    pm.environment.set('token', response.token);",
                   "}"
                 ]
               }
@@ -156,7 +134,7 @@
                 "exec": [
                   "var response = pm.response.json();",
                   "if (response.id) {",
-                  "    pm.collectionVariables.set('project_id', response.id);",
+                  "    pm.environment.set('project_id', response.id);",
                   "}"
                 ]
               }
@@ -312,7 +290,7 @@
                 "exec": [
                   "var response = pm.response.json();",
                   "if (response.id) {",
-                  "    pm.collectionVariables.set('task_id', response.id);",
+                  "    pm.environment.set('task_id', response.id);",
                   "}"
                 ]
               }
